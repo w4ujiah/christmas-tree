@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>粉色粒子圣诞树</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1a0a1e; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; touch-action: none; }
+  .hint {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    color: #f8c8dc; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; letter-spacing: 2px; opacity: .8; pointer-events: none; white-space: nowrap;
+  }
+  .title {
+    position: fixed; top: 30px; left: 50%; transform: translateX(-50%);
+    color: #ffd9e8; font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 24px; letter-spacing: 6px; text-shadow: 0 0 18px rgba(255,140,190,.8);
+    pointer-events: none; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="title">🎀 粉色圣诞树 🎀</div>
+<div class="hint">拖拽旋转 · 双指缩放 · 点击散开</div>
+
+<script src="./lib/three.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var container = document.getElementById('app');
+  var scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x1a0a1e, 0.008);
+
+  var camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 100);
+  camera.position.set(0, 3, 12);
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(renderer.domElement);
+
+  // ---- 粒子参数 ----
+  var treeHeight = 7;
+  var baseRadius = 2.4;
+  var count = 6500;
+
+  var targetPositions = new Float32Array(count * 3);
+  var scatterPositions = new Float32Array(count * 3);
+
+  var pinkBase = new THREE.Color('#ff7ab8');
+  var pinkLight = new THREE.Color('#ffc2dd');
+  var color = new THREE.Color();
+  var temp = new THREE.Vector3();
+
+  function rand(min, max) { return min + Math.random() * (max - min); }
+
+  for (var i = 0; i < count; i++) {
+    var y = Math.pow(Math.random(), 0.85) * treeHeight;
+    var t = 1 - y / treeHeight;
+    var r = baseRadius * t;
+    var angle = Math.random() * Math.PI * 2;
+    var radius = r * Math.sqrt(Math.random());
+
+    targetPositions[i * 3 + 0] = Math.cos(angle) * radius;
+    targetPositions[i * 3 + 1] = y;
+    targetPositions[i * 3 + 2] = Math.sin(angle) * radius;
+
+    temp.set(rand(-1, 1), rand(-1, 1), rand(-1, 1));
+    if (temp.lengthSq() < 1e-4) temp.set(0, 1, 0);
+    temp.normalize();
+    var rr = rand(3, 7);
+    scatterPositions[i * 3 + 0] = temp.x * rr;
+    scatterPositions[i * 3 + 1] = temp.y * rr + 2;
+    scatterPositions[i * 3 + 2] = temp.z * rr;
+  }
+
+  var geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(targetPositions.slice(), 3));
+
+  var colors = new Float32Array(count * 3);
+  for (var j = 0; j < count; j++) {
+    var yc = targetPositions[j * 3 + 1] / treeHeight;
+    color.copy(pinkBase).lerp(pinkLight, yc);
+    var jitter = rand(0.85, 1.15);
+    colors[j * 3 + 0] = Math.min(1, color.r * jitter);
+    colors[j * 3 + 1] = Math.min(1, color.g * jitter);
+    colors[j * 3 + 2] = Math.min(1, color.b * jitter);
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  function makeSprite() {
+    var c = document.createElement('canvas');
+    c.width = c.height = 64;
+    var ctx = c.getContext('2d');
+    var g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.25, 'rgba(255,190,220,1)');
+    g.addColorStop(1, 'rgba(255,140,190,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  }
+
+  var material = new THREE.PointsMaterial({
+    size: 0.09,
+    vertexColors: true,
+    map: makeSprite(),
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
+    sizeAttenuation: true
+  });
+
+  var points = new THREE.Points(geometry, material);
+  scene.add(points);
+
+  var starGeo = new THREE.BufferGeometry();
+  var starPos = new Float32Array(3);
+  starPos[1] = treeHeight + 0.4;
+  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+  var starMat = new THREE.PointsMaterial({
+    size: 0.6, color: 0xffd9ec, map: makeSprite(),
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+  });
+  var star = new THREE.Points(starGeo, starMat);
+  scene.add(star);
+
+  // ---- 自定义轨道控制 ----
+  var TARGET = new THREE.Vector3(0, 2.5, 0);
+  var ctrl = {
+    theta: 0, phi: Math.PI / 3, radius: 12,
+    targetTheta: 0, targetPhi: Math.PI / 3, targetRadius: 12,
+    autoRotate: true
+  };
+  var MIN_PHI = 0.2, MAX_PHI = Math.PI * 0.85;
+  var MIN_R = 4, MAX_R = 25;
+
+  var dragging = false, lastX = 0, lastY = 0;
+  var pinchDist = 0;
+
+  function applyCamera() {
+    var sp = ctrl.phi, st = ctrl.theta, r = ctrl.radius;
+    camera.position.set(
+      TARGET.x + r * Math.sin(sp) * Math.sin(st),
+      TARGET.y + r * Math.cos(sp),
+      TARGET.z + r * Math.sin(sp) * Math.cos(st)
+    );
+    camera.lookAt(TARGET);
+  }
+
+  var dom = renderer.domElement;
+
+  dom.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    ctrl.autoRotate = false;
+  });
+  window.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    ctrl.targetTheta -= dx * 0.005;
+    ctrl.targetPhi -= dy * 0.005;
+    ctrl.targetPhi = Math.max(MIN_PHI, Math.min(MAX_PHI, ctrl.targetPhi));
+  });
+  window.addEventListener('pointerup', function () { dragging = false; });
+
+  dom.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    ctrl.targetRadius *= (e.deltaY > 0 ? 1.08 : 0.92);
+    ctrl.targetRadius = Math.max(MIN_R, Math.min(MAX_R, ctrl.targetRadius));
+  }, { passive: false });
+
+  dom.addEventListener('touchstart', function (e) {
+    if (e.touches.length === 2) {
+      pinchDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+    }
+  }, { passive: true });
+  dom.addEventListener('touchmove', function (e) {
+    if (e.touches.length === 2) {
+      var d = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      var scale = d / (pinchDist || d);
+      ctrl.targetRadius = Math.max(MIN_R, Math.min(MAX_R, ctrl.targetRadius / scale));
+      pinchDist = d;
+    }
+  }, { passive: true });
+
+  // 点击切换散开/聚拢（避免与拖拽冲突：位移小才算点击）
+  var downX = 0, downY = 0;
+  dom.addEventListener('pointerdown', function (e) { downX = e.clientX; downY = e.clientY; });
+  dom.addEventListener('pointerup', function (e) {
+    var moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+    if (moved < 6) { auto = false; scatterDir *= -1; }
+  });
+
+  // ---- 动画状态 ----
+  var scatter = 0;
+  var scatterDir = 1;
+  var auto = true;
+  var current = new Float32Array(count * 3);
+  var positionAttr = geometry.attributes.position;
+
+  function easeInOut(t) {
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  }
+
+  var clock = new THREE.Clock();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    var dt = Math.min(clock.getDelta(), 0.1);
+
+    if (auto) {
+      scatter += scatterDir * dt * 0.35;
+      if (scatter >= 1) { scatter = 1; scatterDir = -1; }
+      if (scatter <= 0) { scatter = 0; scatterDir = 1; }
+    } else {
+      var target = scatterDir === 1 ? 1 : 0;
+      scatter += (target - scatter) * Math.min(1, dt * 3);
+    }
+
+    var t = easeInOut(scatter);
+    for (var i = 0; i < count; i++) {
+      var i3 = i * 3;
+      current[i3 + 0] = targetPositions[i3 + 0] + (scatterPositions[i3 + 0] - targetPositions[i3 + 0]) * t;
+      current[i3 + 1] = targetPositions[i3 + 1] + (scatterPositions[i3 + 1] - targetPositions[i3 + 1]) * t;
+      current[i3 + 2] = targetPositions[i3 + 2] + (scatterPositions[i3 + 2] - targetPositions[i3 + 2]) * t;
+    }
+    positionAttr.array.set(current);
+    positionAttr.needsUpdate = true;
+
+    starMat.size = 0.6 + Math.sin(clock.elapsedTime * 4) * 0.15;
+    star.rotation.y += dt * 0.5;
+
+    // 自动旋转
+    if (ctrl.autoRotate) ctrl.targetTheta += dt * 0.6;
+
+    // 阻尼平滑
+    ctrl.theta += (ctrl.targetTheta - ctrl.theta) * Math.min(1, dt * 8);
+    ctrl.phi += (ctrl.targetPhi - ctrl.phi) * Math.min(1, dt * 8);
+    ctrl.radius += (ctrl.targetRadius - ctrl.radius) * Math.min(1, dt * 8);
+
+    applyCamera();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener('resize', function () {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  });
+})();
+</script>
+</body>
+</html>
